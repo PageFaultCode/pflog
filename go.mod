@@ -1,4 +1,4 @@
-module log.go
+module pflog.go
 
 go 1.16
 
