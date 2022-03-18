@@ -1,0 +1,8 @@
+settings:
+  level: Information
+  trigger_level: Error
+  backlog: 500
+formatters:
+  -
+    id: text
+    filename: "whatever.txt"
