@@ -167,6 +167,25 @@ func (suite *LogTestSuite) TestClone() {
 	suite.Assert().Equal(len(cloneLog.tags), testTagCount)
 }
 
+func (suite *LogTestSuite) TestBufferClear() {
+	log := New()
+
+	_ = log.AddOutputTarget(os.Stdout)
+
+	err := log.SetBacklogDepth(testBacklogDepth)
+	suite.Assert().Nil(err)
+
+	suite.Nil(log.SetTriggerLevel(Error))
+
+	// Should trigger and dump all
+	log.Log(Error, "testing1")
+
+	// Should also trigger and dump all
+	log.Log(Error, "testing2")
+	suite.Assert().Equal(0, log.firstEntry)
+	suite.Assert().Equal(0, log.nextEntry)
+}
+
 func TestLoggingTestSuite(t *testing.T) {
 	suite.Run(t, new(LogTestSuite))
 }

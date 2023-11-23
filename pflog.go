@@ -361,18 +361,21 @@ func (l *Log) dumpBufferRange(entries []*Entry) {
 }
 
 func (l *Log) dumpBuffer() {
-	if l.nextEntry > l.firstEntry {
-		// dump the whole range
-		l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.nextEntry])
-	} else {
-		l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.backlogDepth])
-		l.dumpBufferRange(l.bufferedMessages[:l.nextEntry])
-	}
+	// any entries?
+	if l.firstEntry != l.nextEntry {
+		if l.nextEntry > l.firstEntry {
+			// dump the whole range
+			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.nextEntry])
+		} else {
+			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.backlogDepth])
+			l.dumpBufferRange(l.bufferedMessages[:l.nextEntry])
+		}
 
-	// reset the buffer once dumped
-	l.bufferedMessages = make([]*Entry, l.backlogDepth)
-	l.firstEntry = 0
-	l.nextEntry = 0
+		// reset the buffer once dumped
+		l.bufferedMessages = make([]*Entry, l.backlogDepth)
+		l.firstEntry = 0
+		l.nextEntry = 0
+	}
 }
 
 func (l *Log) addBufferEntry(logEntry *Entry) {
