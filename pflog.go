@@ -348,6 +348,28 @@ func convertStringToLevel(level string) LogLevel {
 	return Error
 }
 
+func (l *Log) flushLastLog() {
+	if l.lastLog == nil {
+		return
+	}
+	switch {
+	case l.duplicateCount == 0:
+		l.addBufferEntry(l.lastLog)
+	case l.duplicateCount == 1:
+		l.addBufferEntry(l.lastLog)
+		l.addBufferEntry(NewEntry(l.lastLog.level, l.lastLog.timestamp, l.lastLog.message, l.tags))
+	default:
+		l.addBufferEntry(NewEntry(
+			l.lastLog.level,
+			l.lastLog.timestamp,
+			fmt.Sprintf("%s (x%d)", l.lastLog.message, l.duplicateCount+1),
+			l.tags,
+		))
+	}
+	l.duplicateCount = 0
+	l.lastLog = nil
+}
+
 func (l *Log) dumpBufferRange(entries []*Entry) {
 	for _, entry := range entries {
 		for index, logger := range l.outputTargets {
@@ -361,6 +383,11 @@ func (l *Log) dumpBufferRange(entries []*Entry) {
 }
 
 func (l *Log) dumpBuffer() {
+	// flush any pending duplicate run first
+	if l.compactDuplicates {
+		l.flushLastLog()
+	}
+
 	// any entries?
 	if l.firstEntry != l.nextEntry {
 		if l.nextEntry > l.firstEntry {
@@ -379,37 +406,28 @@ func (l *Log) dumpBuffer() {
 }
 
 func (l *Log) addBufferEntry(logEntry *Entry) {
-	// if next entry is rolling then set this up
 	if l.nextEntry >= l.backlogDepth {
 		l.nextEntry = 0
+	}
+	// advance firstEntry only if we're about to overwrite a valid slot
+	if l.nextEntry == l.firstEntry && l.bufferedMessages[l.nextEntry] != nil {
 		l.firstEntry = (l.firstEntry + 1) % l.backlogDepth
 	}
-
-	// add this one in
 	l.bufferedMessages[l.nextEntry] = logEntry
-
-	l.nextEntry += 1
+	l.nextEntry++
 }
 
 func (l *Log) buffer(logEntry *Entry) {
-	isDuplicate := false
 	if l.compactDuplicates {
 		if l.lastLog != nil {
 			if logEntry.message == l.lastLog.message {
-				isDuplicate = true
 				l.duplicateCount++
-			} else {
-				// dump the last log and count
-				if l.duplicateCount > 1 {
-					lastEntry := NewEntry(l.lastLog.level, l.lastLog.timestamp, l.lastLog.message+" ("+fmt.Sprintf("%d", l.duplicateCount)+")", l.tags)
-					l.addBufferEntry(lastEntry)
-				}
-				l.duplicateCount = 0
+				return
 			}
+			l.flushLastLog()
 		}
 		l.lastLog = logEntry
+		return
 	}
-	if !isDuplicate {
-		l.addBufferEntry(logEntry)
-	}
+	l.addBufferEntry(logEntry)
 }

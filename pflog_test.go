@@ -15,11 +15,11 @@ const (
 	testBadBacklogDepth    = -1
 	testBadLevelConversion = 42
 	testBacklogStart       = 0
-	testBacklogNext        = 10
-	testBacklogWrapStart   = 1
-	testBacklogWrapNext    = 1
-	testBacklogNextAfter2  = 2
-	testBacklogNextAfter3  = 4
+	testBacklogNext        = 9
+	testBacklogWrapStart   = 0
+	testBacklogWrapNext    = 10
+	testBacklogNextAfter2  = 1
+	testBacklogNextAfter3  = 2
 	testTagCount           = 3
 )
 
@@ -76,8 +76,8 @@ func (suite *LogTestSuite) TestLog() {
 	suite.Assert().Equal(testBacklogStart, log.firstEntry)
 	suite.Assert().Equal(testBacklogNextAfter2, log.nextEntry)
 
-	// adds the duplicate entry and the next one
-	// moving ahead 2
+	// flushes the duplicate run as one annotated entry, moving ahead 1
+	// "something else" is held in lastLog, not yet in ring buffer
 	log.Log(Trace, "something else")
 	suite.Assert().Equal(testBacklogStart, log.firstEntry)
 	suite.Assert().Equal(testBacklogNextAfter3, log.nextEntry)
