@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,8 +17,9 @@ type Settings struct {
 }
 
 type FormatterEntry struct {
-	ID       string `yaml:"id"`
-	Filename string `yaml:"filename,omitempty"`
+	ID              string `yaml:"id"`
+	Filename        string `yaml:"filename,omitempty"`
+	TimestampFormat string `yaml:"timestamp_format,omitempty"` // Go time layout; defaults to RFC3339
 }
 
 type Configuration struct {
@@ -62,6 +64,11 @@ func (configuration *Configuration) LoadConfiguration() error {
 		if createErr != nil {
 			continue
 		}
+		tsFormat := v.TimestampFormat
+		if tsFormat == "" {
+			tsFormat = time.RFC3339
+		}
+		formatter.SetTimestampFormat(tsFormat)
 		outFile, fileErr := os.Create(filepath.Clean(v.Filename))
 		if fileErr != nil {
 			continue
