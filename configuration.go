@@ -23,6 +23,7 @@ type FormatterEntry struct {
 	TimestampFormat string `yaml:"timestamp_format,omitempty"` // Go time layout; defaults to RFC3339
 	MaxSizeMB       int    `yaml:"max_size_mb,omitempty"`      // rotate when file exceeds this size; 0 = disabled
 	MaxBackups      int    `yaml:"max_backups,omitempty"`      // number of rotated files to keep; 0 = keep all
+	Compress        bool   `yaml:"compress,omitempty"`         // gzip older backups; newest backup stays plain
 }
 
 type Configuration struct {
@@ -76,7 +77,7 @@ func (configuration *Configuration) LoadConfiguration() error {
 		if v.Filename == "stdout" {
 			outWriter = os.Stdout
 		} else if v.MaxSizeMB > 0 {
-			rw, rwErr := newRotatingWriter(filepath.Clean(v.Filename), int64(v.MaxSizeMB)*1024*1024, v.MaxBackups)
+			rw, rwErr := newRotatingWriter(filepath.Clean(v.Filename), int64(v.MaxSizeMB)*1024*1024, v.MaxBackups, v.Compress)
 			if rwErr != nil {
 				continue
 			}

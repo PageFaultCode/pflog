@@ -1,7 +1,9 @@
 package pflog
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,21 +15,28 @@ import (
 // RotatingWriter is an io.Writer that writes to a named file and rotates it
 // when the file would exceed maxSize bytes. Rotated files are renamed with a
 // UTC timestamp suffix (e.g. app.log.20060102-150405) so they sort in
-// chronological order. If maxBackups is non-zero, the oldest backups beyond
-// that count are deleted automatically.
+// chronological order.
+//
+// When compress is true, all backup files except the most recently rotated one
+// are gzip-compressed (app.log.20060101-120000.gz). This mirrors logrotate's
+// behaviour: the newest backup stays plain for quick inspection; older ones are
+// compressed on the next rotation cycle.
+//
+// If maxBackups is non-zero, the oldest backup files (compressed or plain)
+// beyond that count are deleted automatically.
 type RotatingWriter struct {
 	filename   string
 	maxSize    int64
 	maxBackups int
+	compress   bool
 	file       *os.File
 	size       int64
 	mu         sync.Mutex
 }
 
 // newRotatingWriter opens (or creates) filename in append mode and returns a
-// RotatingWriter. maxSizeBytes == 0 disables rotation (writes pass straight
-// through). Callers should treat the returned value as an io.Writer.
-func newRotatingWriter(filename string, maxSizeBytes int64, maxBackups int) (*RotatingWriter, error) {
+// RotatingWriter. maxSizeBytes == 0 disables rotation.
+func newRotatingWriter(filename string, maxSizeBytes int64, maxBackups int, compress bool) (*RotatingWriter, error) {
 	f, err := os.OpenFile(filepath.Clean(filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
@@ -41,6 +50,7 @@ func newRotatingWriter(filename string, maxSizeBytes int64, maxBackups int) (*Ro
 		filename:   filename,
 		maxSize:    maxSizeBytes,
 		maxBackups: maxBackups,
+		compress:   compress,
 		file:       f,
 		size:       info.Size(),
 	}, nil
@@ -65,7 +75,8 @@ func (rw *RotatingWriter) Write(p []byte) (int, error) {
 }
 
 // rotate closes the current file, moves it to a timestamped backup name, opens
-// a fresh log file, and prunes old backups when maxBackups is set.
+// a fresh log file, optionally compresses old backups, and prunes when
+// maxBackups is set.
 func (rw *RotatingWriter) rotate() error {
 	if err := rw.file.Close(); err != nil {
 		return fmt.Errorf("close: %w", err)
@@ -83,33 +94,117 @@ func (rw *RotatingWriter) rotate() error {
 	rw.file = f
 	rw.size = 0
 
+	// Compress old backups (all except the one just created) before pruning,
+	// so maxBackups counts compressed files too.
+	if rw.compress {
+		rw.compressOldBackups()
+	}
+
 	if rw.maxBackups > 0 {
 		rw.pruneBackups()
 	}
 	return nil
 }
 
-// pruneBackups removes the oldest timestamped backup files, retaining at most
-// maxBackups of them.
+// compressOldBackups gzip-compresses every plain backup file except the newest
+// one (which was just created by rotate and should stay readable for quick
+// inspection). Already-compressed files are left alone.
+func (rw *RotatingWriter) compressOldBackups() {
+	plain := rw.findBackups(false)
+	sort.Strings(plain) // oldest first; timestamp suffix sorts lexicographically
+
+	// Leave the newest plain backup uncompressed.
+	if len(plain) <= 1 {
+		return
+	}
+	toCompress := plain[:len(plain)-1]
+	for _, path := range toCompress {
+		if err := compressFile(path); err != nil {
+			fmt.Fprintf(os.Stderr, "pflog: compress %s: %v\n", path, err)
+		}
+	}
+}
+
+// pruneBackups removes the oldest backup files (plain and .gz counted together)
+// so that at most maxBackups remain.
 func (rw *RotatingWriter) pruneBackups() {
+	all := append(rw.findBackups(false), rw.findBackups(true)...)
+	sort.Strings(all) // oldest first
+
+	for len(all) > rw.maxBackups {
+		if err := os.Remove(all[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "pflog: prune %s: %v\n", all[0], err)
+		}
+		all = all[1:]
+	}
+}
+
+// findBackups returns absolute paths for backup files in the same directory as
+// filename. If compressed is true, only .gz files are returned; otherwise only
+// plain (non-.gz) files are returned.
+func (rw *RotatingWriter) findBackups(compressed bool) []string {
 	dir := filepath.Dir(rw.filename)
 	prefix := filepath.Base(rw.filename) + "."
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return nil
 	}
 
-	var backups []string
+	var out []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
-			backups = append(backups, filepath.Join(dir, e.Name()))
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		isGz := strings.HasSuffix(name, ".gz")
+		if isGz == compressed {
+			out = append(out, filepath.Join(dir, name))
 		}
 	}
+	return out
+}
 
-	sort.Strings(backups) // timestamp suffix sorts lexicographically oldest-first
-	for len(backups) > rw.maxBackups {
-		os.Remove(backups[0]) //nolint:errcheck
-		backups = backups[1:]
+// compressFile gzip-compresses src to src+".gz" and removes src on success.
+func compressFile(src string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
 	}
+	defer in.Close()
+
+	gzPath := src + ".gz"
+	out, err := os.Create(gzPath)
+	if err != nil {
+		return err
+	}
+
+	gz, err := gzip.NewWriterLevel(out, gzip.BestCompression)
+	if err != nil {
+		out.Close()
+		os.Remove(gzPath) //nolint:errcheck
+		return err
+	}
+
+	_, copyErr := io.Copy(gz, in)
+	gzCloseErr := gz.Close()
+	outCloseErr := out.Close()
+
+	if copyErr != nil {
+		os.Remove(gzPath) //nolint:errcheck
+		return copyErr
+	}
+	if gzCloseErr != nil {
+		os.Remove(gzPath) //nolint:errcheck
+		return gzCloseErr
+	}
+	if outCloseErr != nil {
+		os.Remove(gzPath) //nolint:errcheck
+		return outCloseErr
+	}
+
+	return os.Remove(src)
 }
