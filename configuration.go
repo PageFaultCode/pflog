@@ -21,6 +21,8 @@ type FormatterEntry struct {
 	ID              string `yaml:"id"`
 	Filename        string `yaml:"filename,omitempty"`
 	TimestampFormat string `yaml:"timestamp_format,omitempty"` // Go time layout; defaults to RFC3339
+	MaxSizeMB       int    `yaml:"max_size_mb,omitempty"`      // rotate when file exceeds this size; 0 = disabled
+	MaxBackups      int    `yaml:"max_backups,omitempty"`      // number of rotated files to keep; 0 = keep all
 }
 
 type Configuration struct {
@@ -73,6 +75,12 @@ func (configuration *Configuration) LoadConfiguration() error {
 		var outWriter io.Writer
 		if v.Filename == "stdout" {
 			outWriter = os.Stdout
+		} else if v.MaxSizeMB > 0 {
+			rw, rwErr := newRotatingWriter(filepath.Clean(v.Filename), int64(v.MaxSizeMB)*1024*1024, v.MaxBackups)
+			if rwErr != nil {
+				continue
+			}
+			outWriter = rw
 		} else {
 			outFile, fileErr := os.OpenFile(filepath.Clean(v.Filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if fileErr != nil {
