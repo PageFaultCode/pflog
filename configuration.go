@@ -2,6 +2,7 @@
 package pflog
 
 import (
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -69,11 +70,17 @@ func (configuration *Configuration) LoadConfiguration() error {
 			tsFormat = time.RFC3339
 		}
 		formatter.SetTimestampFormat(tsFormat)
-		outFile, fileErr := os.Create(filepath.Clean(v.Filename))
-		if fileErr != nil {
-			continue
+		var outWriter io.Writer
+		if v.Filename == "stdout" {
+			outWriter = os.Stdout
+		} else {
+			outFile, fileErr := os.OpenFile(filepath.Clean(v.Filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if fileErr != nil {
+				continue
+			}
+			outWriter = outFile
 		}
-		_ = log.AddOutputTargetAndFormatter(outFile, formatter)
+		_ = log.AddOutputTargetAndFormatter(outWriter, formatter)
 	}
 
 	configuration.UserLog = log
