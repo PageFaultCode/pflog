@@ -2,8 +2,9 @@
 package pflog
 
 import (
+	"errors"
+	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -34,7 +35,7 @@ type Configuration struct {
 
 func (configuration *Configuration) LoadConfigurationFile(filename string) error {
 	configuration.UserLog = nil
-	fileContents, err := ioutil.ReadFile(filepath.Clean(filename))
+	fileContents, err := os.ReadFile(filepath.Clean(filename))
 
 	if err != nil {
 		return err
@@ -58,14 +59,22 @@ func (configuration *Configuration) LoadConfiguration() error {
 	if err != nil {
 		return err
 	}
-	err = log.SetBacklogDepth(configuration.Settings.Backlog)
+	backlog := configuration.Settings.Backlog
+	if backlog < 1 {
+		backlog = DefaultBacklogDepth
+	}
+	err = log.SetBacklogDepth(backlog)
 	if err != nil {
 		return err
 	}
 
+	// configure every valid target; collect failures rather than
+	// silently dropping them
+	var targetErrs []error
 	for _, v := range configuration.Formatters {
 		formatter, createErr := CreateFormatter(v.ID)
 		if createErr != nil {
+			targetErrs = append(targetErrs, createErr)
 			continue
 		}
 		tsFormat := v.TimestampFormat
@@ -79,12 +88,14 @@ func (configuration *Configuration) LoadConfiguration() error {
 		} else if v.MaxSizeMB > 0 {
 			rw, rwErr := newRotatingWriter(filepath.Clean(v.Filename), int64(v.MaxSizeMB)*1024*1024, v.MaxBackups, v.Compress)
 			if rwErr != nil {
+				targetErrs = append(targetErrs, fmt.Errorf("formatter %s: %w", v.ID, rwErr))
 				continue
 			}
 			outWriter = rw
 		} else {
-			outFile, fileErr := os.OpenFile(filepath.Clean(v.Filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			outFile, fileErr := os.OpenFile(filepath.Clean(v.Filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
 			if fileErr != nil {
+				targetErrs = append(targetErrs, fmt.Errorf("formatter %s: %w", v.ID, fileErr))
 				continue
 			}
 			outWriter = outFile
@@ -94,7 +105,7 @@ func (configuration *Configuration) LoadConfiguration() error {
 
 	configuration.UserLog = log
 
-	return nil
+	return errors.Join(targetErrs...)
 }
 
 func (configuration *Configuration) GetLogger() *Log {

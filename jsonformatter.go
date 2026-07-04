@@ -43,7 +43,7 @@ func (jf *JSONFormatter) SetPrettyPrint(prettyPrint bool) {
 func (jf *JSONFormatter) Format(entry *Entry) []byte {
 	var err error
 
-	jsonOutput := JSONOutputFormat{}
+	jsonOutput := JSONOutputFormat{Tags: make(map[string]interface{}, len(entry.tags))}
 	jsonOutput.TimeStamp = entry.timestamp.Local().Format(jf.timeFormat)
 	jsonOutput.Level, err = convertLevelToString(entry.level, true)
 	if err != nil {

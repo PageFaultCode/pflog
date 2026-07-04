@@ -1,7 +1,10 @@
 // Package pflog defines all of the pflog package
 package pflog
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 // LogFormatter can format logs a specific way and
 // can time stamp them as required, the default is no
@@ -42,13 +45,23 @@ func RegisterFormatter(id string, formatter LogFormatter) error {
 	return nil
 }
 
-// CreateFormatter returns a formatter based on the selected
-// id such as read from a config file.
+// CreateFormatter returns a new formatter instance based on the selected
+// id such as read from a config file. A fresh instance is returned each
+// call so per-target settings (e.g. timestamp format) are not shared.
 func CreateFormatter(id string) (LogFormatter, error) {
 	formatter, exists := formatters[id]
 	if !exists {
 		return nil, fmt.Errorf("unable to create formatter: %v", id)
 	}
 
-	return formatter, nil
+	formatterType := reflect.TypeOf(formatter)
+	if formatterType.Kind() != reflect.Ptr {
+		return formatter, nil
+	}
+	newFormatter, ok := reflect.New(formatterType.Elem()).Interface().(LogFormatter)
+	if !ok {
+		return nil, fmt.Errorf("unable to instantiate formatter: %v", id)
+	}
+
+	return newFormatter, nil
 }

@@ -38,7 +38,7 @@ func (yf *YAMLFormatter) SetTimestampFormat(format string) {
 func (yf *YAMLFormatter) Format(entry *Entry) []byte {
 	var err error
 
-	yamlOutput := YAMLOutputFormat{}
+	yamlOutput := YAMLOutputFormat{Tags: make(map[string]interface{}, len(entry.tags))}
 	yamlOutput.TimeStamp = entry.timestamp.Local().Format(yf.timeFormat)
 	yamlOutput.Level, err = convertLevelToString(entry.level, true)
 	if err != nil {

@@ -44,6 +44,7 @@ type Log struct {
 	backlogDepth      int
 	nextEntry         int
 	firstEntry        int
+	entryCount        int
 	compactDuplicates bool
 	lastLog           *Entry
 	duplicateCount    int
@@ -62,6 +63,7 @@ func New() *Log {
 		backlogDepth:      DefaultBacklogDepth,
 		nextEntry:         0,
 		firstEntry:        0,
+		entryCount:        0,
 		lastLog:           nil,
 		duplicateCount:    0,
 		compactDuplicates: true,
@@ -75,6 +77,9 @@ func New() *Log {
 // Clone returns a clone of the given log allowing for the cascading of tags
 // this will need some thought
 func (l *Log) Clone() *Log {
+	l.logLock.Lock()
+	defer l.logLock.Unlock()
+
 	newLog := New()
 
 	newLog.level = l.level
@@ -126,13 +131,14 @@ func (l *Log) SetBacklogDepth(depth int) error {
 	l.logLock.Lock()
 	defer l.logLock.Unlock()
 
-	if depth < 0 {
+	if depth < 1 {
 		return fmt.Errorf("bad backlog depth selected: %d", depth)
 	}
 	l.backlogDepth = depth
 	l.bufferedMessages = make([]*Entry, depth)
 	l.firstEntry = 0
 	l.nextEntry = 0
+	l.entryCount = 0
 
 	return nil
 }
@@ -149,6 +155,9 @@ func (l *Log) SetCompactDuplicates(compact bool) {
 // GetCompactDuplicates returns wheterh the logger is
 // compacting duplicte entries or not
 func (l *Log) GetCompactDuplicates() bool {
+	l.logLock.Lock()
+	defer l.logLock.Unlock()
+
 	return l.compactDuplicates
 }
 
@@ -156,10 +165,7 @@ func (l *Log) GetCompactDuplicates() bool {
 // and defaults to the standard text formatter
 func (l *Log) AddOutputTarget(writer io.Writer) int {
 	// Lock in add target/formatter
-	l.AddOutputTargetAndFormatter(writer, &TextFormatter{timeFormat: time.ANSIC})
-
-	// index is 1 less than length
-	return len(l.outputTargets) - 1
+	return l.AddOutputTargetAndFormatter(writer, &TextFormatter{timeFormat: time.ANSIC})
 }
 
 // AddOutputTargetAndFormatter assigns both an output
@@ -201,7 +207,13 @@ func (l *Log) GetOutputFormatter(index int) (*LogFormatter, error) {
 
 // AddTag adds a give tag to a logger
 func (l *Log) AddTag(name string, value interface{}) {
-	l.tags = append(l.tags, CreateTag(name, value))
+	l.logLock.Lock()
+	defer l.logLock.Unlock()
+
+	// copy-on-write so entries already holding the old slice are unaffected
+	tags := make([]*Tag, len(l.tags), len(l.tags)+1)
+	copy(tags, l.tags)
+	l.tags = append(tags, CreateTag(name, value))
 }
 
 // Log will log the given string at the specified level
@@ -360,13 +372,13 @@ func (l *Log) flushLastLog() {
 		l.addBufferEntry(l.lastLog)
 	case l.duplicateCount == 1:
 		l.addBufferEntry(l.lastLog)
-		l.addBufferEntry(NewEntry(l.lastLog.level, l.lastLog.timestamp, l.lastLog.message, l.tags))
+		l.addBufferEntry(NewEntry(l.lastLog.level, l.lastLog.timestamp, l.lastLog.message, l.lastLog.tags))
 	default:
 		l.addBufferEntry(NewEntry(
 			l.lastLog.level,
 			l.lastLog.timestamp,
 			fmt.Sprintf("%s (x%d)", l.lastLog.message, l.duplicateCount+1),
-			l.tags,
+			l.lastLog.tags,
 		))
 	}
 	l.duplicateCount = 0
@@ -392,19 +404,20 @@ func (l *Log) dumpBuffer() {
 	}
 
 	// any entries?
-	if l.firstEntry != l.nextEntry {
-		if l.nextEntry > l.firstEntry {
+	if l.entryCount > 0 {
+		if l.firstEntry+l.entryCount <= l.backlogDepth {
 			// dump the whole range
-			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.nextEntry])
+			l.dumpBufferRange(l.bufferedMessages[l.firstEntry : l.firstEntry+l.entryCount])
 		} else {
 			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.backlogDepth])
-			l.dumpBufferRange(l.bufferedMessages[:l.nextEntry])
+			l.dumpBufferRange(l.bufferedMessages[:l.firstEntry+l.entryCount-l.backlogDepth])
 		}
 
 		// reset the buffer once dumped
 		l.bufferedMessages = make([]*Entry, l.backlogDepth)
 		l.firstEntry = 0
 		l.nextEntry = 0
+		l.entryCount = 0
 	}
 }
 
@@ -412,9 +425,11 @@ func (l *Log) addBufferEntry(logEntry *Entry) {
 	if l.nextEntry >= l.backlogDepth {
 		l.nextEntry = 0
 	}
-	// advance firstEntry only if we're about to overwrite a valid slot
-	if l.nextEntry == l.firstEntry && l.bufferedMessages[l.nextEntry] != nil {
+	if l.entryCount == l.backlogDepth {
+		// buffer is full: overwrite the oldest entry
 		l.firstEntry = (l.firstEntry + 1) % l.backlogDepth
+	} else {
+		l.entryCount++
 	}
 	l.bufferedMessages[l.nextEntry] = logEntry
 	l.nextEntry++
@@ -423,7 +438,7 @@ func (l *Log) addBufferEntry(logEntry *Entry) {
 func (l *Log) buffer(logEntry *Entry) {
 	if l.compactDuplicates {
 		if l.lastLog != nil {
-			if logEntry.message == l.lastLog.message {
+			if logEntry.message == l.lastLog.message && logEntry.level == l.lastLog.level {
 				l.duplicateCount++
 				return
 			}
