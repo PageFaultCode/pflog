@@ -1,0 +1,24 @@
+name: vulncheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, Mondays 06:00 UTC — catches newly published CVEs
+    # in existing dependencies even when the repo is idle.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan for known vulnerabilities
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: stable
+          go-package: ./...
