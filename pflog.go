@@ -4,6 +4,7 @@ package pflog
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -294,14 +295,16 @@ func (l *Log) Errorf(logFormat string, args ...interface{}) {
 	l.Logf(Error, logFormat, args...)
 }
 
-// Fatal helper function to reduce having to pass in the level
+// Fatal logs at Fatal level then exits the process.
 func (l *Log) Fatal(message string) {
 	l.Log(Fatal, message)
+	os.Exit(1)
 }
 
-// Fatalf helper function to reduce having to pass in the level
+// Fatalf logs at Fatal level then exits the process.
 func (l *Log) Fatalf(logFormat string, args ...interface{}) {
 	l.Logf(Fatal, logFormat, args...)
+	os.Exit(1)
 }
 
 func convertLevelToString(level LogLevel, capitalize bool) (string, error) {
