@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -183,6 +184,107 @@ func (suite *RegressionTestSuite) TestPruneIgnoresUnrelatedFiles() {
 	_, statErr := os.Stat(unrelated)
 	suite.Nil(statErr)
 	suite.Len(rw.findBackups(false), 1)
+}
+
+// syncBuffer guards bytes.Buffer with a mutex — needed only in these signal
+// tests, where the dump runs on EnableSignalDump's own goroutine while the
+// test concurrently polls the buffer via suite.Eventually. bytes.Buffer
+// itself is not safe for that; the race is in the test harness, not in
+// DumpBuffer/EnableSignalDump (dumpBufferRange's writes are already
+// serialized by logLock on the production side).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// A real SIGUSR1 must dump whatever is currently buffered, without needing
+// a trigger-level entry — the on-demand path added for radar#60-equivalent
+// "is this process healthy or wedged" investigations. Entries below `level`
+// are the ones that only ever surface via a dump (Log() writes immediately,
+// separately from buffering, for anything at or above level but below
+// triggerLevel) — so this uses a Trace entry under an Information floor to
+// exercise the buffer-only path the signal dump exists for.
+func (suite *RegressionTestSuite) TestSignalDumpsBuffer() {
+	log := New()
+	log.SetCompactDuplicates(false)
+	suite.Nil(log.SetLevel(Information))
+	suite.Nil(log.SetTriggerLevel(Fatal)) // nothing here should self-trigger
+
+	buf := &syncBuffer{}
+	_ = log.AddOutputTarget(buf)
+
+	stop := log.EnableSignalDump(syscall.SIGUSR1)
+	defer stop()
+
+	log.Trace("before signal")
+	suite.Empty(buf.String(), "an entry below level must not write until dumped")
+
+	suite.Nil(syscall.Kill(syscall.Getpid(), syscall.SIGUSR1))
+	suite.Eventually(func() bool {
+		return strings.Contains(buf.String(), "before signal")
+	}, time.Second, 10*time.Millisecond)
+}
+
+// Repeated signals must dump repeatedly, not just once (no one-shot
+// behavior, no state left corrupted by a prior dump).
+func (suite *RegressionTestSuite) TestSignalDumpRepeats() {
+	log := New()
+	log.SetCompactDuplicates(false)
+	suite.Nil(log.SetLevel(Trace))
+	suite.Nil(log.SetTriggerLevel(Fatal))
+
+	buf := &syncBuffer{}
+	_ = log.AddOutputTarget(buf)
+
+	stop := log.EnableSignalDump(syscall.SIGUSR1)
+	defer stop()
+
+	log.Trace("first batch")
+	suite.Nil(syscall.Kill(syscall.Getpid(), syscall.SIGUSR1))
+	suite.Eventually(func() bool {
+		return strings.Contains(buf.String(), "first batch")
+	}, time.Second, 10*time.Millisecond)
+
+	log.Trace("second batch")
+	suite.Nil(syscall.Kill(syscall.Getpid(), syscall.SIGUSR1))
+	suite.Eventually(func() bool {
+		return strings.Contains(buf.String(), "second batch")
+	}, time.Second, 10*time.Millisecond)
+}
+
+// Trigger-level dumping must keep working unmodified once a signal handler
+// is also registered — the two dump paths share dumpBuffer but must not
+// interfere with each other.
+func (suite *RegressionTestSuite) TestSignalDumpDoesNotAffectTriggerDump() {
+	log := New()
+	log.SetCompactDuplicates(false)
+	suite.Nil(log.SetLevel(Trace))
+	suite.Nil(log.SetTriggerLevel(Error))
+
+	var buf bytes.Buffer
+	_ = log.AddOutputTarget(&buf)
+
+	stop := log.EnableSignalDump(syscall.SIGUSR1)
+	defer stop()
+
+	log.Trace("leads up to the error")
+	log.Log(Error, "boom") // trigger-level dump, unrelated to the signal
+
+	output := buf.String()
+	suite.Contains(output, "leads up to the error")
+	suite.Contains(output, "boom")
 }
 
 func TestRegressionTestSuite(t *testing.T) {

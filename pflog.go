@@ -397,6 +397,19 @@ func (l *Log) dumpBufferRange(entries []*Entry) {
 	}
 }
 
+// DumpBuffer flushes the current backlog to every output target on demand,
+// independent of level/trigger_level. Unlike a trigger-level dump (which
+// only ever fires from inside Log() while logLock is already held), this is
+// the external entry point — e.g. wired to a signal so a healthy-but-quiet
+// process and a wedged-but-quiet process stop being indistinguishable from
+// outside. See EnableSignalDump.
+func (l *Log) DumpBuffer() {
+	l.logLock.Lock()
+	defer l.logLock.Unlock()
+
+	l.dumpBuffer()
+}
+
 func (l *Log) dumpBuffer() {
 	// flush any pending duplicate run first
 	if l.compactDuplicates {
