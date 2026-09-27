@@ -30,8 +30,8 @@ func (yf *YAMLFormatter) SetTimestampFormat(format string) {
 	yf.timeFormat = format
 }
 
-// Format formats a log entry into a json
-// entry such as:
+// Format formats a log entry into a yaml
+// document such as:
 // "message": "whatever"
 // "level": "information"
 // etc
@@ -52,7 +52,9 @@ func (yf *YAMLFormatter) Format(entry *Entry) []byte {
 	formattedMessage, marshallErr := yaml.Marshal(yamlOutput)
 
 	if marshallErr != nil {
-		formattedMessage = []byte(marshallErr.Error())
+		formattedMessage = []byte(marshallErr.Error() + "\n")
 	}
-	return formattedMessage
+	// start each record as its own document so a file target is a valid
+	// multi-document stream rather than one mapping with repeated keys
+	return append([]byte("---\n"), formattedMessage...)
 }

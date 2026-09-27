@@ -3,7 +3,9 @@ package pflog
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"gopkg.in/yaml.v3"
 )
 
 type RegressionTestSuite struct {
@@ -82,6 +85,42 @@ func (suite *RegressionTestSuite) TestFormattersWithTags() {
 		suite.Contains(output, "tagged message")
 		suite.Contains(output, "value")
 	})
+}
+
+// JSON records used to run together with no separator, and YAML records
+// merged into one mapping with repeated keys, so neither formatter's file
+// output could be parsed back as a stream of entries.
+func (suite *RegressionTestSuite) TestFormatterOutputIsAStream() {
+	first := NewEntry(Information, time.Now(), "first", nil)
+	second := NewEntry(Warning, time.Now(), "second", nil)
+
+	jf := &JSONFormatter{}
+	jf.SetTimestampFormat(time.RFC3339)
+	jsonStream := append(jf.Format(first), jf.Format(second)...)
+	lines := strings.Split(strings.TrimSuffix(string(jsonStream), "\n"), "\n")
+	suite.Len(lines, 2)
+	var jsonMessages []string
+	for _, line := range lines {
+		var record JSONOutputFormat
+		suite.NoError(json.Unmarshal([]byte(line), &record))
+		jsonMessages = append(jsonMessages, record.Message)
+	}
+	suite.Equal([]string{"first", "second"}, jsonMessages)
+
+	yf := &YAMLFormatter{}
+	yf.SetTimestampFormat(time.RFC3339)
+	yamlStream := append(yf.Format(first), yf.Format(second)...)
+	decoder := yaml.NewDecoder(bytes.NewReader(yamlStream))
+	var yamlMessages []string
+	for {
+		var record YAMLOutputFormat
+		if err := decoder.Decode(&record); err != nil {
+			suite.ErrorIs(err, io.EOF)
+			break
+		}
+		yamlMessages = append(yamlMessages, record.Message)
+	}
+	suite.Equal([]string{"first", "second"}, yamlMessages)
 }
 
 // A backlog depth of zero used to be accepted and then panic on first flush.

@@ -66,5 +66,7 @@ func (jf *JSONFormatter) Format(entry *Entry) []byte {
 	if marshallErr != nil {
 		formattedMessage = []byte(marshallErr.Error())
 	}
-	return formattedMessage
+	// newline-terminate so a file target is a JSON Lines stream rather than
+	// records run together
+	return append(formattedMessage, '\n')
 }
