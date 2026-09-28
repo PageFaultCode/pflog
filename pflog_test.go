@@ -119,7 +119,7 @@ func (suite *LogTestSuite) TestBacklogOverflow() {
 	suite.Assert().Equal(testBacklogWrapNext, log.nextEntry)
 
 	// do this last as it will affect the backlog
-	log.dumpBuffer()
+	log.dumpBuffer(false)
 }
 func (suite *LogTestSuite) TestConvertLevelToString() {
 	level, err := convertLevelToString(Trace, true)

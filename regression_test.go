@@ -44,6 +44,51 @@ func (suite *RegressionTestSuite) TestFullBufferDumpsOnTrigger() {
 	suite.Contains(output, "boom")
 }
 
+// A trigger dump replays only what wasn't written live (afm-platform-core#32). Lines at or above
+// the live level were written when logged; replaying them on the trigger printed them twice, so a
+// service that logged one error near startup looked as if it logged everything twice. The hidden
+// context (below the live level) and the triggering entry itself must still appear, once each.
+func (suite *RegressionTestSuite) TestTriggerDumpDoesNotRepeatLiveLines() {
+	log := New()
+	log.SetCompactDuplicates(false)
+	suite.Nil(log.SetTriggerLevel(Error))
+	suite.Nil(log.SetLevel(Information))
+
+	var buf bytes.Buffer
+	_ = log.AddOutputTarget(&buf)
+
+	log.Information("started") // written live
+	log.Debug("context")       // below the live level: only the dump shows it
+	log.Warning("slow")        // written live
+	log.Error("boom")          // trigger: dump the context, then itself
+
+	output := buf.String()
+	suite.Equal(1, strings.Count(output, "started"), "a live line must not be replayed by the trigger dump")
+	suite.Equal(1, strings.Count(output, "slow"), "a live line must not be replayed by the trigger dump")
+	suite.Equal(1, strings.Count(output, "context"), "the hidden context must appear on the trigger")
+	suite.Equal(1, strings.Count(output, "boom"), "the trigger itself must appear once")
+}
+
+// The on-demand dump (a signal) replays everything, live lines included: it exists to show what a
+// quiet process has been doing, not to add context to an error.
+func (suite *RegressionTestSuite) TestOnDemandDumpStillReplaysEverything() {
+	log := New()
+	log.SetCompactDuplicates(false)
+	suite.Nil(log.SetTriggerLevel(Fatal))
+	suite.Nil(log.SetLevel(Information))
+
+	var buf bytes.Buffer
+	_ = log.AddOutputTarget(&buf)
+
+	log.Information("started")
+	log.Debug("context")
+	log.DumpBuffer()
+
+	output := buf.String()
+	suite.Equal(2, strings.Count(output, "started"), "on demand, the live line is replayed")
+	suite.Equal(1, strings.Count(output, "context"))
+}
+
 // Overflowing the buffer past full must keep the newest entries.
 func (suite *RegressionTestSuite) TestOverfullBufferKeepsNewest() {
 	log := New()

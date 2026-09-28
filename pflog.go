@@ -231,7 +231,7 @@ func (l *Log) Log(level LogLevel, message string) {
 		if level >= l.triggerLevel {
 			// if at or above trigger level, this entry
 			// has been dumpped when the buffer is dumped.
-			l.dumpBuffer()
+			l.dumpTriggered()
 		} else {
 			// output information
 			for index, logger := range l.outputTargets {
@@ -385,8 +385,16 @@ func (l *Log) flushLastLog() {
 	l.lastLog = nil
 }
 
-func (l *Log) dumpBufferRange(entries []*Entry) {
+func (l *Log) dumpBufferRange(entries []*Entry, skipWritten bool) {
 	for _, entry := range entries {
+		// A trigger dump replays the CONTEXT that wasn't written live (entries below l.level),
+		// then the triggering entry. Entries at or above l.level and below the trigger level were
+		// already written when they were logged; replaying them printed every recent line twice,
+		// so a service that logged one error near startup appeared to log everything twice
+		// (afm-platform-core#32).
+		if skipWritten && entry != nil && entry.level >= l.level && entry.level < l.triggerLevel {
+			continue
+		}
 		for index, logger := range l.outputTargets {
 			logMessage := l.outputFormatters[index].Format(entry)
 			_, err := logger.Write(logMessage)
@@ -407,10 +415,19 @@ func (l *Log) DumpBuffer() {
 	l.logLock.Lock()
 	defer l.logLock.Unlock()
 
-	l.dumpBuffer()
+	l.dumpBuffer(false)
 }
 
-func (l *Log) dumpBuffer() {
+// dumpTriggered is the trigger-level dump: the hidden context and the trigger, without re-writing
+// what was already written live.
+func (l *Log) dumpTriggered() {
+	l.dumpBuffer(true)
+}
+
+// dumpBuffer writes the backlog and resets it. skipWritten leaves out entries that were written
+// live (the trigger dump); the on-demand DumpBuffer passes false and replays everything, because
+// it exists to show what a quiet process has been doing.
+func (l *Log) dumpBuffer(skipWritten bool) {
 	// flush any pending duplicate run first
 	if l.compactDuplicates {
 		l.flushLastLog()
@@ -420,10 +437,10 @@ func (l *Log) dumpBuffer() {
 	if l.entryCount > 0 {
 		if l.firstEntry+l.entryCount <= l.backlogDepth {
 			// dump the whole range
-			l.dumpBufferRange(l.bufferedMessages[l.firstEntry : l.firstEntry+l.entryCount])
+			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.firstEntry+l.entryCount], skipWritten)
 		} else {
-			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.backlogDepth])
-			l.dumpBufferRange(l.bufferedMessages[:l.firstEntry+l.entryCount-l.backlogDepth])
+			l.dumpBufferRange(l.bufferedMessages[l.firstEntry:l.backlogDepth], skipWritten)
+			l.dumpBufferRange(l.bufferedMessages[:l.firstEntry+l.entryCount-l.backlogDepth], skipWritten)
 		}
 
 		// reset the buffer once dumped
